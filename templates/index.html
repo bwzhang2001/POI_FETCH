@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <title>POI 爬取 + 可视化</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link href="/static/main.css" rel="stylesheet" />
+    <style>
+    body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif; margin:0; background:#fafafa; }
+    .container { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+    h1 { margin: 0 0 16px; }
+    .card { background:#fff; border:1px solid #eee; border-radius:10px; padding:16px; margin-bottom:16px; }
+    .row { display:flex; align-items:center; gap:8px; }
+    label { display:block; margin:8px 0 4px; font-weight: 600; }
+    input[type="text"], input[type="number"], textarea, select { width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; background:#fff; }
+    textarea { resize: vertical; }
+    .btn { padding:8px 12px; border:1px solid #bbb; border-radius:6px; background:#f7f7f7; cursor:pointer; }
+    .btn:hover { background:#f0f0f0; }
+    .btn.primary { background:#1677ff; color:#fff; border-color:#1677ff; }
+    .box { background:#f6f8fa; border:1px solid #eaecef; padding:10px; border-radius:6px; white-space:pre-wrap; }
+    small { color:#666; }
+  </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>POI 爬取 + 可视化</h1>
+        <div class="card">
+            <h2>参数</h2>
+            <label>百度 AK（服务端）</label>
+            <div class="row">
+                <input id="ak" type="text" placeholder="输入你的百度地图 AK" style="flex:1" />
+                <button id="btnLoadRegions" class="btn">加载/刷新行政区</button>
+            </div>
+            <small id="regionStatus">
+                第一次使用请先输入 AK 并点击“加载/刷新行政区”。（AK 不会保存在前端；服务端会请求百度API）
+            </small>
+            <label style="margin-top:12px;">省份</label>
+            <select id="province" disabled></select>
+            <label>城市</label>
+            <select id="city" disabled>
+                <option value="all">全部</option>
+            </select>
+            <label>区县</label>
+            <select id="district" disabled>
+                <option value="all">全部</option>
+            </select>
+            <label>关键词列表（用逗号分隔）</label>
+            <textarea id="queries" rows="4">{{ default_queries }}</textarea>
+            <div class="row">
+                <div style="flex:1;">
+                    <label>QPS</label>
+                    <input id="qps" type="number" step="0.5" value="2.0" />
+                </div>
+                <div style="flex:1;">
+                    <label>仅限城市（city_limit）</label>
+                    <select id="city_limit">
+                        <option value="true" selected>true</option>
+                        <option value="false">false</option>
+                    </select>
+                </div>
+            </div>
+            <button id="btnCrawl" class="btn primary" style="margin-top:8px;">开始爬取</button>
+            <div id="status" style="margin-top:8px;"></div>
+        </div>
+        <div class="card">
+            <h2>可视化（数据库数据）</h2>
+            <div class="row">
+                <a class="btn" href="/map" target="_blank">打开地图（数据库）</a>
+                <a class="btn" href="/export_csv">导出数据库 CSV</a>
+                <button class="btn" id="btnExportMapDb">导出数据库地图（HTML）</button>
+            </div>
+            <button class="btn" id="btnRefreshCats" style="margin-top:14px;">查看分类统计（数据库）</button>
+            <pre id="catsBox" class="box"></pre>
+        </div>
+        <div class="card">
+            <h2>上传 CSV（合并 / 可视化 / 导出）</h2>
+            <small>
+                支持多次追加文件、列表里可删除任意单个文件；也可以把文件直接拖拽到灰框里。
+                系统会自动识别经纬度列（支持 lon/lng/longitude/经度 与 lat/latitude/纬度），并尽量保留 name/category 字段。
+            </small>
+            <input type="file" id="csvPicker" accept=".csv" multiple style="display:none;" />
+            <div class="row" style="align-items: stretch; margin-top:10px;">
+                <div style="flex:0 0 auto;">
+                    <button class="btn" id="btnAddFiles">添加文件</button>
+                </div>
+                <div id="dropZone" class="box" style="flex:1; border:1px dashed #cfd3dc; background:#fafafa;">
+                    将 CSV 文件拖拽到此处，或点击“添加文件”
+                </div>
+            </div>
+            <div id="fileListWrap" style="margin-top:10px;">
+                <ul id="fileList" style="list-style:none; padding:0; margin:0;"></ul>
+            </div>
+            <div class="row" style="margin-top:10px;">
+                <button class="btn" id="btnMerge">合并并可视化</button>
+                <button class="btn" id="btnExportMerge" disabled>导出合并地图（HTML）</button>
+            </div>
+            <pre id="csvStatus" class="box" style="margin-top:10px;"></pre>
+        </div>
+        <script src="/static/main.js"></script>
+        <script>
+        async function loadRegions() {
+            const ak = document.getElementById("ak").value.trim();
+            if (!ak) {
+                document.getElementById("regionStatus").textContent = "请先输入 AK";
+                return;
+            }
+            document.getElementById("regionStatus").textContent = "正在加载行政区...";
+            const res = await fetch("/regions?ak=" + encodeURIComponent(ak));
+            const data = await res.json();
+            if (data.__error) {
+                document.getElementById("regionStatus").textContent = "加载失败：" + data.__error;
+                return;
+            }
+            const provinceSel = document.getElementById("province");
+            const citySel = document.getElementById("city");
+            const distSel = document.getElementById("district");
+            provinceSel.innerHTML = "";
+            for (const p of Object.keys(data)) {
+                const opt = document.createElement("option");
+                opt.value = p;
+                opt.textContent = p;
+                provinceSel.appendChild(opt);
+            }
+            provinceSel.disabled = false;
+
+            provinceSel.onchange = () => {
+                const p = provinceSel.value;
+                const cities = data[p] || {};
+                citySel.innerHTML = "<option value='all'>全部</option>";
+                Object.keys(cities).forEach(c => {
+                    const opt = document.createElement("option");
+                    opt.value = c;
+                    opt.textContent = c;
+                    citySel.appendChild(opt);
+                });
+                citySel.disabled = false;
+
+                citySel.onchange();
+            };
+
+            citySel.onchange = () => {
+                const p = provinceSel.value;
+                const c = citySel.value;
+                const cities = data[p] || {};
+                distSel.innerHTML = "<option value='all'>全部</option>";
+                if (c && c !== "all" && Array.isArray(cities[c])) {
+                    cities[c].forEach(d => {
+                        const opt = document.createElement("option");
+                        opt.value = d;
+                        opt.textContent = d;
+                        distSel.appendChild(opt);
+                    });
+                }
+                distSel.disabled = false;
+            };
+
+            provinceSel.onchange();
+            document.getElementById("regionStatus").textContent = "行政区加载完成";
+        }
+
+        document.getElementById("btnLoadRegions").addEventListener("click", loadRegions);
+
+        document.getElementById("btnCrawl").addEventListener("click", async () => {
+            const ak = document.getElementById("ak").value.trim();
+            const province = document.getElementById("province").value;
+            const city = document.getElementById("city").value;
+            const district = document.getElementById("district").value;
+            const queries = document.getElementById("queries").value;
+            const qps = document.getElementById("qps").value || "2.0";
+            const city_limit = document.getElementById("city_limit").value;
+
+            const payload = {
+                ak,
+                province,
+                city,
+                district,
+                queries,
+                qps: parseFloat(qps),
+                city_limit: (city_limit === "true")
+            };
+
+            document.getElementById("status").textContent = "任务已提交，正在爬取...";
+            const res = await fetch("/crawl", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+            const data = await res.json();
+            document.getElementById("status").textContent = JSON.stringify(data, null, 2);
+        });
+
+        document.getElementById("btnExportMapDb").addEventListener("click", async () => {
+            const res = await fetch("/export_map_db");
+            if (!res.ok) {
+                alert("导出失败：" + res.status);
+                return;
+            }
+            const blob = await res.blob();
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "poi_map_db.html";
+            a.click();
+        });
+
+        document.getElementById("btnRefreshCats").addEventListener("click", async () => {
+            const res = await fetch("/categories");
+            const data = await res.json();
+            document.getElementById("catsBox").textContent = JSON.stringify(data, null, 2);
+        });
+
+        let currentGeoJSON = null;
+
+        document.getElementById("btnUploadCsv").addEventListener("click", async () => {
+            const files = document.getElementById("csvFiles").files;
+            const statusEl = document.getElementById("csvStatus");
+            if (!files.length) {
+                statusEl.textContent = "请选择一个或多个 CSV 文件";
+                return;
+            }
+            const fd = new FormData();
+            for (const f of files) fd.append("files", f);
+
+            statusEl.textContent = "正在上传并合并...";
+            try {
+                const res = await fetch("/upload_csv", { method: "POST", body: fd });
+                const data = await res.json();
+                if (!data.ok) {
+                    statusEl.textContent = "合并失败：" + (data.msg || "未知错误") + "\n" + JSON.stringify(data.files || [], null, 2);
+                    return;
+                }
+                currentGeoJSON = data.geojson;
+                statusEl.textContent = "合并成功：共 " + data.total_points + " 个点\n" + JSON.stringify(data.files || [], null, 2);
+            } catch (e) {
+                statusEl.textContent = "请求失败：" + e.message;
+            }
+        });
+
+        document.getElementById("btnExportCsvMap").addEventListener("click", async () => {
+            const statusEl = document.getElementById("csvStatus");
+            if (!currentGeoJSON) {
+                statusEl.textContent = "没有可导出的数据，请先上传并合并。";
+                return;
+            }
+            statusEl.textContent = "正在导出 HTML 地图...";
+            try {
+                const payload = { title: "合并POI地图", zoom: 8, center: [34.0, 108.0], geojson: currentGeoJSON };
+                const res = await fetch("/export_map", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    statusEl.textContent = "导出失败：" + (data.msg || res.statusText);
+                    return;
+                }
+                const blob = await res.blob();
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = res.headers.get("Content-Disposition") ? .match(/filename="?(.+?)"?$/) ? . [1] || "merged_map.html";
+                a.click();
+                statusEl.textContent = "导出完成：HTML 已下载。";
+            } catch (e) {
+                statusEl.textContent = "导出失败：" + e.message;
+            }
+        });
+        </script>
+</body>
+
+</html>

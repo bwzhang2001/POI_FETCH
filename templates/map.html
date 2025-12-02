@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>POI 地图（OpenStreetMap）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
+  <link href="/static/main.css" rel="stylesheet" />
+  <style>
+    #map { height: 92vh; }
+    .legend { position:absolute; left:12px; bottom:12px; z-index:9999;
+              background:#fff; padding:10px 12px; border:1px solid #aaa;
+              border-radius:8px; max-height:40vh; overflow:auto; font-size:12px; }
+    .legend .item { margin: 4px 0; white-space: nowrap; }
+    .legend .swatch { display:inline-block; width:12px; height:12px; border:1px solid #444; margin-right:6px; vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="legend" id="legend"><b>分类（source_query）</b><div id="legendItems"></div></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script>
+    const osm = L.tileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution: '&copy; OpenStreetMap contributors' }
+    );
+    const map = L.map('map', { center: [36.06, 103.83], zoom: 11, layers: [osm] });
+
+    const palette = [
+      "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
+      "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf",
+      "#393b79","#637939","#8c6d31","#843c39","#7b4173",
+      "#3182bd","#e6550d","#31a354","#756bb1","#636363"
+    ];
+    const colorMap = {};
+    function colorFor(cat){
+      if(!colorMap[cat]){
+        const n = Object.keys(colorMap).length;
+        colorMap[cat] = palette[n % palette.length];
+      }
+      return colorMap[cat];
+    }
+    function refreshLegend(){
+      const box = document.getElementById('legendItems');
+      box.innerHTML = '';
+      Object.keys(colorMap).forEach(cat=>{
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML = `<span class="swatch" style="background:${colorMap[cat]}"></span>${cat}`;
+        box.appendChild(div);
+      });
+    }
+
+    const cluster = L.markerClusterGroup();
+    map.addLayer(cluster);
+
+    function loadAll(){
+      fetch('/categories').then(r=>r.json()).then(cats=>{
+        cats.forEach(c=>colorFor(c.source_query||'其他'));
+        refreshLegend();
+        return fetch('/data').then(r=>r.json());
+      }).then(geojson=>{
+        const layer = L.geoJSON(geojson, {
+          pointToLayer: (feat, latlng) => {
+            const cat = feat.properties.source_query || '其他';
+            const color = colorFor(cat);
+            return L.circleMarker(latlng, {
+              radius: 4, color, fillColor: color, fillOpacity: 0.7, weight: 1
+            }).bindPopup(`
+              <b>${feat.properties.name || ''}</b><br/>
+              ${feat.properties.address || ''}<br/>
+              类别：${cat}<br/>
+              评分：${feat.properties.overall_rating || ''}  价格：${feat.properties.price || ''}<br/>
+              电话：${feat.properties.telephone || ''}
+            `);
+          }
+        });
+        cluster.clearLayers();
+        cluster.addLayer(layer);
+        const b = layer.getBounds();
+        if (b.isValid()) map.fitBounds(b.pad(0.1));
+        refreshLegend();
+      });
+    }
+
+    loadAll();
+  </script>
+</body>
+</html>

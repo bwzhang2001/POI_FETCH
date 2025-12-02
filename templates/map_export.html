@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
+
+  <style>
+    html,body,#map { height:100%; margin:0; }
+    .title {
+      position:absolute; z-index:999; left:10px; top:10px;
+      background:rgba(255,255,255,.9); padding:6px 10px; border-radius:6px; border:1px solid #eee;
+      font-size:14px;
+    }
+    .legend {
+      position:absolute; left:12px; bottom:12px; z-index:9999;
+      background:#fff; padding:10px 12px; border:1px solid #aaa;
+      border-radius:8px; max-height:40vh; overflow:auto; font-size:12px;
+    }
+    .legend .item { margin: 4px 0; white-space: nowrap; }
+    .legend .swatch { display:inline-block; width:12px; height:12px; border:1px solid #444; margin-right:6px; vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <div class="title">{{ title }}</div>
+  <div id="map"></div>
+  <div class="legend" id="legend"><b>分类（source_query 或 category）</b><div id="legendItems"></div></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script>
+    const CENTER = {{ center|tojson if center is defined else "[34.0,108.0]" }};
+    const ZOOM   = {{ zoom if zoom is defined else 7 }};
+    const GEOJSON = {{ geojson|safe }};
+
+    const map = L.map('map').setView(CENTER, ZOOM);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 20, attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    const cluster = L.markerClusterGroup(); map.addLayer(cluster);
+
+    const palette = [
+      "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
+      "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf",
+      "#393b79","#637939","#8c6d31","#843c39","#7b4173",
+      "#3182bd","#e6550d","#31a354","#756bb1","#636363"
+    ];
+    const colorMap = {};
+    const legendItems = document.getElementById('legendItems');
+    function colorFor(cat){
+      const key = String(cat || '其他');
+      if(!colorMap[key]){
+        const n = Object.keys(colorMap).length;
+        colorMap[key] = palette[n % palette.length];
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.innerHTML = `<span class="swatch" style="background:${colorMap[key]}"></span>${key}`;
+        legendItems.appendChild(div);
+      }
+      return colorMap[key];
+    }
+
+    function pointToMarker(feature, latlng) {
+      const props = feature.properties || {};
+      const cat = props.source_query || props.category || '其他';
+      const c = colorFor(cat);
+      const name = props.name || '';
+      const addr = props.address || '';
+      const rating = props.overall_rating || '';
+      const price = props.price || '';
+      const tel = props.telephone || '';
+      const html = `
+        <div><b>${name || '未命名'}</b></div>
+        ${addr ? `<div>${addr}</div>` : ''}
+        <div>类别：${cat}</div>
+        <div>${rating ? '评分：'+rating+' ' : ''}${price ? '价格：'+price : ''}</div>
+        ${tel ? `<div>电话：${tel}</div>` : ''}
+      `;
+      return L.circleMarker(latlng, { radius: 4, color:c, fillColor:c, fillOpacity:0.7, weight:1 }).bindPopup(html);
+    }
+
+    const layer = L.geoJSON(GEOJSON, { pointToLayer: pointToMarker });
+    cluster.addLayer(layer);
+
+    if (layer.getLayers().length > 0) {
+      map.fitBounds(layer.getBounds().pad(0.2));
+    }
+  </script>
+</body>
+</html>
